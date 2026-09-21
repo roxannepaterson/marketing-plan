@@ -80,6 +80,16 @@
   .action-main{ flex:1; }
   .action-text{ font-weight:600; font-size:13.5px; margin-bottom:3px; }
   .action-owner{ font-size:11.5px; color:var(--ink-soft); }
+  .action-text-input{
+    font-weight:600; font-size:13.5px; border:1px solid transparent; background:transparent;
+    padding:3px 5px; border-radius:5px; width:100%; color:var(--ink);
+  }
+  .action-text-input:hover, .action-text-input:focus{ border-color:var(--line); background:#fff; outline:none; }
+  .action-owner-input{
+    font-size:11.5px; color:var(--ink-soft); border:1px solid transparent; background:transparent;
+    padding:2px 5px; border-radius:5px; width:110px;
+  }
+  .action-owner-input:hover, .action-owner-input:focus{ border-color:var(--line); background:#fff; outline:none; color:var(--ink); }
   .action-controls{ display:flex; align-items:center; gap:6px; }
   .action-controls select{ padding:5px 7px; border:1px solid var(--line); border-radius:6px; font-size:11.5px; font-family:'Jost', sans-serif; }
   .action-del{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:14px; padding:0 3px; }
@@ -95,8 +105,10 @@
   .cal-day:hover{ box-shadow:var(--shadow); }
   .cal-day.empty{ background:transparent; border:none; cursor:default; }
   .cal-day.today{ border-color:var(--gold); border-width:2px; }
+  .cal-day.drag-over{ background:var(--promoter-soft); border-color:var(--promoter); }
   .cal-daynum{ font-size:11.5px; font-weight:700; color:var(--ink-soft); }
-  .cal-note{ font-size:10px; color:var(--ink); background:var(--neutral-soft); border-radius:4px; padding:2px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cal-note{ font-size:10px; color:var(--ink); background:var(--neutral-soft); border-radius:4px; padding:2px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:grab; }
+  .cal-note:active{ cursor:grabbing; }
   .cal-more{ font-size:9.5px; color:var(--ink-soft); }
 
   .overlay{ position:fixed; inset:0; background:rgba(30,42,50,0.35); display:none; align-items:center; justify-content:center; z-index:100; padding:20px; }
@@ -104,9 +116,10 @@
   .modal{ background:var(--panel); border-radius:12px; padding:24px; width:400px; max-width:100%; max-height:88vh; overflow-y:auto; box-shadow:0 12px 40px rgba(0,0,0,0.2); }
   .modal h3{ margin:0 0 14px; font-family:'Jost', sans-serif; font-weight:600; font-size:20px; }
   .modal-actions{ display:flex; justify-content:space-between; margin-top:16px; gap:8px; }
-  .day-entry{ display:flex; align-items:flex-start; gap:8px; margin:6px 0; font-size:13px; }
-  .day-entry .entry-text{ flex:1; }
-  .day-entry button{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:14px; padding:0 3px; }
+  .day-entry{ display:flex; align-items:center; gap:6px; margin:6px 0; font-size:13px; flex-wrap:wrap; }
+  .day-entry .entry-text{ flex:1; min-width:100px; }
+  .day-entry .entry-move-date{ padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:11px; }
+  .day-entry .entry-del-btn{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:14px; padding:0 3px; }
   .day-add-row{ display:flex; gap:6px; margin-top:10px; }
   .day-add-row input{ flex:1; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
 
@@ -243,6 +256,18 @@
     try{ await calRef.child(dateKey).child(entryId).remove(); }
     catch(e){ showError('Delete failed: ' + e.code + ' — ' + e.message); }
   }
+  async function moveCalEntry(fromDate, toDate, entryId, text){
+    // Optimistic local update first, so the grid reflects the move instantly
+    // rather than waiting on the Firebase round-trip (same fix as the earlier delete bug).
+    if (calendarEntries[fromDate]) delete calendarEntries[fromDate][entryId];
+    if (!calendarEntries[toDate]) calendarEntries[toDate] = {};
+    calendarEntries[toDate][entryId] = text;
+    if (activeTab === 'calendar') renderActivePanel();
+    try{
+      await calRef.child(fromDate).child(entryId).remove();
+      await calRef.child(toDate).child(entryId).set(text);
+    }catch(e){ showError('Move failed: ' + e.code + ' — ' + e.message); }
+  }
 
   async function saveMeeting(m){
     try{ await meetingsRef.child(m.id).set(m); }
@@ -258,7 +283,7 @@
 
   function renderTabNav(){
     tabNav.innerHTML = '';
-    const allTabs = [['dashboard','Dashboard']].concat(CONTENT_TABS.map(t=>[t.key, t.label])).concat([['meetingNotes','Marketing Meeting Notes']]);
+    const allTabs = [['dashboard','Dashboard'], ['actionsOverview','Actions']].concat(CONTENT_TABS.map(t=>[t.key, t.label])).concat([['meetingNotes','Marketing Meeting Notes']]);
     allTabs.forEach(([key,label])=>{
       const btn = document.createElement('button');
       btn.className = 'tab-btn' + (activeTab === key ? ' active' : '');
@@ -271,6 +296,7 @@
   function renderActivePanel(){
     panelsEl.innerHTML = '';
     if (activeTab === 'dashboard'){ panelsEl.appendChild(buildDashboardPanel()); return; }
+    if (activeTab === 'actionsOverview'){ panelsEl.appendChild(buildActionsOverviewPanel()); return; }
     if (activeTab === 'calendar'){ panelsEl.appendChild(buildCalendarPanel()); return; }
     if (activeTab === 'meetingNotes'){ panelsEl.appendChild(buildMeetingNotesPanel()); return; }
     const tab = CONTENT_TABS.find(t=>t.key===activeTab);
@@ -383,8 +409,11 @@
       row.className = 'action-row';
       row.innerHTML = `
         <div class="action-main">
-          <div class="action-text">${escapeHtml(a.text)}</div>
-          <div class="action-owner">${escapeHtml(a.owner || 'Unassigned')}${a.deadline ? ' · Due ' + escapeHtml(formatDeadline(a.deadline)) : ''}</div>
+          <input type="text" class="action-text-input" value="${escapeHtml(a.text)}" />
+          <div style="display:flex; align-items:center; gap:6px; margin-top:3px;">
+            <input type="text" class="action-owner-input" value="${escapeHtml(a.owner || '')}" placeholder="Owner…" />
+            ${a.deadline ? '<span class="action-owner" style="font-size:11.5px; color:var(--ink-soft);">· Due ' + escapeHtml(formatDeadline(a.deadline)) + '</span>' : ''}
+          </div>
         </div>
         <div class="action-controls">
           <input type="date" class="action-deadline" value="${a.deadline || ''}" />
@@ -392,6 +421,13 @@
           <button class="action-del">×</button>
         </div>
       `;
+      row.querySelector('.action-text-input').addEventListener('blur', async (e)=>{
+        const newText = e.target.value.trim();
+        if (newText) await saveAction(tabKey, Object.assign({}, a, { text: newText }));
+      });
+      row.querySelector('.action-owner-input').addEventListener('blur', async (e)=>{
+        await saveAction(tabKey, Object.assign({}, a, { owner: e.target.value.trim() }));
+      });
       row.querySelector('select').addEventListener('change', async (e)=>{
         await saveAction(tabKey, Object.assign({}, a, { status: e.target.value }));
       });
@@ -434,6 +470,76 @@
     textInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') addAction(); });
 
     return wrap;
+  }
+
+  function buildActionsOverviewPanel(){
+    const panel = document.createElement('div');
+    panel.className = 'panel active';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<h2>All Actions</h2><p class="card-sub">Every action across every workstream, soonest due first. Click a row to jump to it.</p>`;
+
+    let allActions = [];
+    CONTENT_TABS.forEach(t=>{
+      (actionsByTab[t.key] || []).forEach(a=>{
+        allActions.push(Object.assign({}, a, { tabKey: t.key, tabLabel: t.label }));
+      });
+    });
+
+    if (!allActions.length){
+      const empty = document.createElement('p');
+      empty.style.color = 'var(--ink-soft)';
+      empty.style.fontSize = '13px';
+      empty.textContent = 'No actions logged yet across any workstream.';
+      card.appendChild(empty);
+      panel.appendChild(card);
+      return panel;
+    }
+
+    // Sort: items with a deadline first (soonest first), undated items last
+    allActions.sort((a,b)=>{
+      if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+      if (a.deadline) return -1;
+      if (b.deadline) return 1;
+      return 0;
+    });
+
+    const table = document.createElement('table');
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+    table.style.fontSize = '13px';
+    table.innerHTML = `
+      <thead>
+        <tr style="text-align:left; border-bottom:2px solid var(--line);">
+          <th style="padding:8px 10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em; color:var(--ink-soft);">Workstream</th>
+          <th style="padding:8px 10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em; color:var(--ink-soft);">Action</th>
+          <th style="padding:8px 10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em; color:var(--ink-soft);">Owner</th>
+          <th style="padding:8px 10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em; color:var(--ink-soft);">Due</th>
+          <th style="padding:8px 10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em; color:var(--ink-soft);">Status</th>
+        </tr>
+      </thead>
+    `;
+    const tbody = document.createElement('tbody');
+    allActions.forEach(a=>{
+      const colors = STATUS_COLORS[a.status] || STATUS_COLORS['Not Started'];
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--line)';
+      tr.style.cursor = 'pointer';
+      tr.innerHTML = `
+        <td style="padding:9px 10px; color:var(--ink-soft);">${escapeHtml(a.tabLabel)}</td>
+        <td style="padding:9px 10px; font-weight:600;">${escapeHtml(a.text)}</td>
+        <td style="padding:9px 10px; color:var(--ink-soft);">${escapeHtml(a.owner || 'Unassigned')}</td>
+        <td style="padding:9px 10px; color:var(--ink-soft);">${a.deadline ? escapeHtml(formatDeadline(a.deadline)) : '—'}</td>
+        <td style="padding:9px 10px;"><span class="status-badge" style="background:${colors.bg}; color:${colors.fg};">${escapeHtml(a.status || 'Not Started')}</span></td>
+      `;
+      tr.addEventListener('click', ()=>{ activeTab = a.tabKey; renderTabNav(); renderActivePanel(); });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    card.appendChild(table);
+    panel.appendChild(card);
+    return panel;
   }
 
   function buildGenericTabPanel(tab){
@@ -578,14 +684,45 @@
       const cell = document.createElement('div');
       const isToday = today.getFullYear()===calYear && today.getMonth()===calMonth && today.getDate()===day;
       cell.className = 'cal-day' + (isToday ? ' today' : '');
+      cell.dataset.dateKey = dateKey;
       const entries = calendarEntries[dateKey] ? Object.entries(calendarEntries[dateKey]) : [];
-      let inner = `<span class="cal-daynum">${day}</span>`;
+
+      const dayNum = document.createElement('span');
+      dayNum.className = 'cal-daynum';
+      dayNum.textContent = day;
+      cell.appendChild(dayNum);
+
       entries.slice(0,2).forEach(([id,text])=>{
-        inner += `<span class="cal-note">${escapeHtml(text)}</span>`;
+        const tag = document.createElement('span');
+        tag.className = 'cal-note';
+        tag.textContent = text;
+        tag.draggable = true;
+        tag.addEventListener('dragstart', (e)=>{
+          e.stopPropagation();
+          e.dataTransfer.setData('text/plain', JSON.stringify({ entryId:id, text, fromDate:dateKey }));
+        });
+        tag.addEventListener('click', (e)=>{ e.stopPropagation(); openDayModal(dateKey); });
+        cell.appendChild(tag);
       });
-      if (entries.length > 2) inner += `<span class="cal-more">+${entries.length-2} more</span>`;
-      cell.innerHTML = inner;
+      if (entries.length > 2){
+        const more = document.createElement('span');
+        more.className = 'cal-more';
+        more.textContent = '+' + (entries.length - 2) + ' more';
+        cell.appendChild(more);
+      }
+
       cell.addEventListener('click', ()=> openDayModal(dateKey));
+      cell.addEventListener('dragover', (e)=>{ e.preventDefault(); cell.classList.add('drag-over'); });
+      cell.addEventListener('dragleave', ()=> cell.classList.remove('drag-over'));
+      cell.addEventListener('drop', (e)=>{
+        e.preventDefault();
+        cell.classList.remove('drag-over');
+        let payload;
+        try{ payload = JSON.parse(e.dataTransfer.getData('text/plain')); }catch(err){ return; }
+        if (!payload || payload.fromDate === dateKey) return;
+        moveCalEntry(payload.fromDate, dateKey, payload.entryId, payload.text);
+      });
+
       grid.appendChild(cell);
     }
 
@@ -634,12 +771,24 @@
       current.forEach(([id, text])=>{
         const row = document.createElement('div');
         row.className = 'day-entry';
-        row.innerHTML = `<span class="entry-text">${escapeHtml(text)}</span><button>×</button>`;
-        row.querySelector('button').addEventListener('click', ()=>{
+        row.innerHTML = `
+          <span class="entry-text">${escapeHtml(text)}</span>
+          <input type="date" class="entry-move-date" title="Move to another date" />
+          <button class="entry-move-btn secondary" style="padding:4px 8px; font-size:11px;">Move</button>
+          <button class="entry-del-btn">×</button>
+        `;
+        row.querySelector('.entry-del-btn').addEventListener('click', ()=>{
           delete localEntries[id];
           if (calendarEntries[dateKey]) delete calendarEntries[dateKey][id];
           renderEntries();
           deleteCalEntry(dateKey, id);
+        });
+        row.querySelector('.entry-move-btn').addEventListener('click', ()=>{
+          const newDate = row.querySelector('.entry-move-date').value;
+          if (!newDate || newDate === dateKey) return;
+          delete localEntries[id];
+          renderEntries();
+          moveCalEntry(dateKey, newDate, id, text);
         });
         listEl.appendChild(row);
       });
