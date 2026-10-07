@@ -121,6 +121,11 @@
   .day-entry .entry-text{ flex:1; min-width:100px; }
   .day-entry .entry-move-date{ padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:11px; }
   .day-entry .entry-del-btn{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:14px; padding:0 3px; }
+  .idea-row{ display:flex; align-items:center; gap:8px; margin:7px 0; flex-wrap:wrap; }
+  .idea-text-input{ flex:1; min-width:180px; font-size:13.5px; border:1px solid transparent; background:transparent; padding:5px 7px; border-radius:6px; color:var(--ink); }
+  .idea-text-input:hover, .idea-text-input:focus{ border-color:var(--line); background:#fff; outline:none; }
+  .idea-date{ padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:11.5px; }
+  .idea-row .item-del{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:14px; padding:0 3px; }
   .day-add-row{ display:flex; gap:6px; margin-top:10px; }
   .day-add-row input{ flex:1; padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
 
@@ -200,7 +205,8 @@
     'Complete':    { bg:'var(--promoter-soft)', fg:'var(--promoter)' }
   };
   const CONTENT_TABS = [
-    { key:'calendar', label:'Calendar' },
+    { key:'calendar', label:'LinkedIn Calendar' },
+    { key:'instagramCalendar', label:'Instagram Calendar' },
     { key:'website', label:'Website' },
     { key:'caseStudies', label:'Case Studies' },
     { key:'marketingCollateral', label:'Marketing Collateral' }
@@ -208,15 +214,20 @@
 
   let activeTab = 'dashboard';
   let goals = [];
-  let calendarEntries = {};   // { 'YYYY-MM-DD': { entryId: text, ... } }
-  let actionsByTab = { calendar:[], website:[], caseStudies:[], marketingCollateral:[] };
+  // The two calendars. 'calendar' keeps the original database path, so existing entries stay as the LinkedIn calendar.
+  const CALENDAR_TABS = {
+    calendar:          { label:'LinkedIn',  path:'marketingPlanCalendar' },
+    instagramCalendar: { label:'Instagram', path:'marketingPlanCalendarInstagram' }
+  };
+  let calendarEntries = { calendar:{}, instagramCalendar:{} };   // per calendar: { 'YYYY-MM-DD': { entryId: {text, ready} } }
+  let ideasByCal = { calendar:[], instagramCalendar:[] };
+  let actionsByTab = { calendar:[], instagramCalendar:[], website:[], caseStudies:[], marketingCollateral:[] };
   let meetings = [];
   let expandedMeetingIds = new Set();
   let calMonth = new Date().getMonth();
   let calYear = new Date().getFullYear();
 
   const goalsRef = db.ref('marketingPlanGoals');
-  const calRef = db.ref('marketingPlanCalendar');
   const meetingsRef = db.ref('marketingMeetingNotes');
 
   function objToArray(obj){
@@ -226,8 +237,16 @@
 
   goalsRef.on('value', (s)=>{ goals = objToArray(s.val()); if (activeTab==='dashboard') renderActivePanel(); },
     (e)=> showError('Could not load goals: ' + e.code + ' — ' + e.message));
-  calRef.on('value', (s)=>{ calendarEntries = s.val() || {}; if (activeTab==='calendar') renderActivePanel(); },
-    (e)=> showError('Could not load calendar: ' + e.code + ' — ' + e.message));
+  Object.keys(CALENDAR_TABS).forEach(calKey=>{
+    db.ref(CALENDAR_TABS[calKey].path).on('value', (s)=>{
+      calendarEntries[calKey] = s.val() || {};
+      if (activeTab === calKey) renderActivePanel();
+    }, (e)=> showError('Could not load ' + CALENDAR_TABS[calKey].label + ' calendar: ' + e.code + ' — ' + e.message));
+    db.ref('marketingPlanIdeas/' + calKey).on('value', (s)=>{
+      ideasByCal[calKey] = objToArray(s.val());
+      if (activeTab === calKey) renderActivePanel();
+    }, (e)=> showError('Could not load post ideas: ' + e.code + ' — ' + e.message));
+  });
   meetingsRef.on('value', (s)=>{ meetings = objToArray(s.val()); if (activeTab==='meetingNotes') renderActivePanel(); },
     (e)=> showError('Could not load meeting notes: ' + e.code + ' — ' + e.message));
 
@@ -255,31 +274,44 @@
   function entryText(val){ return (typeof val === 'string') ? val : (val && val.text) || ''; }
   function entryReady(val){ return (typeof val === 'object' && val && val.ready) || false; }
 
-  async function saveCalEntry(dateKey, entryId, entryObj){
-    try{ await calRef.child(dateKey).child(entryId).set(entryObj); }
+  function calRefFor(calKey){ return db.ref(CALENDAR_TABS[calKey].path); }
+
+  async function saveCalEntry(calKey, dateKey, entryId, entryObj){
+    try{ await calRefFor(calKey).child(dateKey).child(entryId).set(entryObj); }
     catch(e){ showError('Save failed: ' + e.code + ' — ' + e.message); }
   }
-  async function deleteCalEntry(dateKey, entryId){
-    try{ await calRef.child(dateKey).child(entryId).remove(); }
+  async function deleteCalEntry(calKey, dateKey, entryId){
+    try{ await calRefFor(calKey).child(dateKey).child(entryId).remove(); }
     catch(e){ showError('Delete failed: ' + e.code + ' — ' + e.message); }
   }
-  async function moveCalEntry(fromDate, toDate, entryId, entryObj){
+  async function moveCalEntry(calKey, fromDate, toDate, entryId, entryObj){
     // Optimistic local update first, so the grid reflects the move instantly
     // rather than waiting on the Firebase round-trip (same fix as the earlier delete bug).
-    if (calendarEntries[fromDate]) delete calendarEntries[fromDate][entryId];
-    if (!calendarEntries[toDate]) calendarEntries[toDate] = {};
-    calendarEntries[toDate][entryId] = entryObj;
-    if (activeTab === 'calendar') renderActivePanel();
+    const entries = calendarEntries[calKey];
+    if (entries[fromDate]) delete entries[fromDate][entryId];
+    if (!entries[toDate]) entries[toDate] = {};
+    entries[toDate][entryId] = entryObj;
+    if (activeTab === calKey) renderActivePanel();
     try{
-      await calRef.child(fromDate).child(entryId).remove();
-      await calRef.child(toDate).child(entryId).set(entryObj);
+      await calRefFor(calKey).child(fromDate).child(entryId).remove();
+      await calRefFor(calKey).child(toDate).child(entryId).set(entryObj);
     }catch(e){ showError('Move failed: ' + e.code + ' — ' + e.message); }
   }
-  async function toggleCalEntryReady(dateKey, entryId, currentVal){
+  async function toggleCalEntryReady(calKey, dateKey, entryId, currentVal){
     const newObj = { text: entryText(currentVal), ready: !entryReady(currentVal) };
-    if (calendarEntries[dateKey]) calendarEntries[dateKey][entryId] = newObj;
-    if (activeTab === 'calendar') renderActivePanel();
-    await saveCalEntry(dateKey, entryId, newObj);
+    if (calendarEntries[calKey][dateKey]) calendarEntries[calKey][dateKey][entryId] = newObj;
+    if (activeTab === calKey) renderActivePanel();
+    await saveCalEntry(calKey, dateKey, entryId, newObj);
+  }
+
+  // Post ideas (one list per calendar)
+  async function saveIdea(calKey, idea){
+    try{ await db.ref('marketingPlanIdeas/' + calKey + '/' + idea.id).set(idea); }
+    catch(e){ showError('Save failed: ' + e.code + ' — ' + e.message); }
+  }
+  async function deleteIdea(calKey, id){
+    try{ await db.ref('marketingPlanIdeas/' + calKey + '/' + id).remove(); }
+    catch(e){ showError('Delete failed: ' + e.code + ' — ' + e.message); }
   }
 
   async function saveMeeting(m){
@@ -314,7 +346,7 @@
     panelsEl.innerHTML = '';
     if (activeTab === 'dashboard'){ panelsEl.appendChild(buildDashboardPanel()); return; }
     if (activeTab === 'actionsOverview'){ panelsEl.appendChild(buildActionsOverviewPanel()); return; }
-    if (activeTab === 'calendar'){ panelsEl.appendChild(buildCalendarPanel()); return; }
+    if (CALENDAR_TABS[activeTab]){ panelsEl.appendChild(buildCalendarPanel(activeTab)); return; }
     if (activeTab === 'meetingNotes'){ panelsEl.appendChild(buildMeetingNotesPanel()); return; }
     const tab = CONTENT_TABS.find(t=>t.key===activeTab);
     panelsEl.appendChild(buildGenericTabPanel(tab));
@@ -659,12 +691,17 @@
   }
 
   // ---------- Calendar ----------
-  function buildCalendarPanel(){
+  function buildCalendarPanel(calKey){
     const panel = document.createElement('div');
     panel.className = 'panel active';
     const card = document.createElement('div');
     card.className = 'card';
     card.style.marginBottom = '18px';
+
+    const calTitle = document.createElement('h2');
+    calTitle.textContent = CALENDAR_TABS[calKey].label + ' Posts';
+    calTitle.style.marginBottom = '12px';
+    card.appendChild(calTitle);
 
     const header = document.createElement('div');
     header.className = 'cal-header';
@@ -702,7 +739,7 @@
       const isToday = today.getFullYear()===calYear && today.getMonth()===calMonth && today.getDate()===day;
       cell.className = 'cal-day' + (isToday ? ' today' : '');
       cell.dataset.dateKey = dateKey;
-      const entries = calendarEntries[dateKey] ? Object.entries(calendarEntries[dateKey]) : [];
+      const entries = calendarEntries[calKey][dateKey] ? Object.entries(calendarEntries[calKey][dateKey]) : [];
 
       const dayNum = document.createElement('span');
       dayNum.className = 'cal-daynum';
@@ -718,7 +755,7 @@
           e.stopPropagation();
           e.dataTransfer.setData('text/plain', JSON.stringify({ entryId:id, val, fromDate:dateKey }));
         });
-        tag.addEventListener('click', (e)=>{ e.stopPropagation(); openDayModal(dateKey); });
+        tag.addEventListener('click', (e)=>{ e.stopPropagation(); openDayModal(calKey, dateKey); });
         cell.appendChild(tag);
       });
       if (entries.length > 2){
@@ -728,7 +765,7 @@
         cell.appendChild(more);
       }
 
-      cell.addEventListener('click', ()=> openDayModal(dateKey));
+      cell.addEventListener('click', ()=> openDayModal(calKey, dateKey));
       cell.addEventListener('dragover', (e)=>{ e.preventDefault(); cell.classList.add('drag-over'); });
       cell.addEventListener('dragleave', ()=> cell.classList.remove('drag-over'));
       cell.addEventListener('drop', (e)=>{
@@ -737,7 +774,7 @@
         let payload;
         try{ payload = JSON.parse(e.dataTransfer.getData('text/plain')); }catch(err){ return; }
         if (!payload || payload.fromDate === dateKey) return;
-        moveCalEntry(payload.fromDate, dateKey, payload.entryId, payload.val);
+        moveCalEntry(calKey, payload.fromDate, dateKey, payload.entryId, payload.val);
       });
 
       grid.appendChild(cell);
@@ -745,7 +782,8 @@
 
     card.appendChild(grid);
     panel.appendChild(card);
-    panel.appendChild(buildActionTracker('calendar'));
+    panel.appendChild(buildIdeasCard(calKey));
+    panel.appendChild(buildActionTracker(calKey));
 
     setTimeout(()=>{
       panel.querySelector('#prevMonth').addEventListener('click', ()=>{
@@ -761,12 +799,78 @@
     return panel;
   }
 
+  function buildIdeasCard(calKey){
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.style.marginBottom = '18px';
+    wrap.innerHTML = `<h2>New ${escapeHtml(CALENDAR_TABS[calKey].label)} post ideas</h2><p class="card-sub">Park ideas here, then schedule them onto the calendar when you're ready.</p>`;
+
+    const ideas = ideasByCal[calKey] || [];
+    if (!ideas.length){
+      const empty = document.createElement('p');
+      empty.style.cssText = 'font-size:12.5px; color:var(--ink-soft); margin:0 0 6px;';
+      empty.textContent = 'No ideas yet.';
+      wrap.appendChild(empty);
+    }
+    ideas.forEach(idea=>{
+      const row = document.createElement('div');
+      row.className = 'idea-row';
+      row.innerHTML = `
+        <input type="text" class="idea-text-input" value="${escapeHtml(idea.text)}" />
+        <input type="date" class="idea-date" title="Pick a date to schedule this on" />
+        <button class="secondary small idea-schedule-btn">Schedule</button>
+        <button class="item-del">×</button>
+      `;
+      row.querySelector('.idea-text-input').addEventListener('blur', async (e)=>{
+        const newText = e.target.value.trim();
+        if (newText && newText !== idea.text) await saveIdea(calKey, Object.assign({}, idea, { text: newText }));
+      });
+      row.querySelector('.idea-schedule-btn').addEventListener('click', ()=>{
+        const date = row.querySelector('.idea-date').value;
+        if (!date){ alert('Pick a date first.'); return; }
+        const entryId = uid();
+        const entryObj = { text: idea.text, ready: false };
+        // optimistic local updates, then persist
+        if (!calendarEntries[calKey][date]) calendarEntries[calKey][date] = {};
+        calendarEntries[calKey][date][entryId] = entryObj;
+        ideasByCal[calKey] = ideasByCal[calKey].filter(i => i.id !== idea.id);
+        renderActivePanel();
+        saveCalEntry(calKey, date, entryId, entryObj);
+        deleteIdea(calKey, idea.id);
+      });
+      row.querySelector('.item-del').addEventListener('click', ()=>{
+        ideasByCal[calKey] = ideasByCal[calKey].filter(i => i.id !== idea.id);
+        renderActivePanel();
+        deleteIdea(calKey, idea.id);
+      });
+      wrap.appendChild(row);
+    });
+
+    const addRow = document.createElement('div');
+    addRow.className = 'add-row';
+    addRow.innerHTML = `<input type="text" class="ideaAddInput" placeholder="Add a post idea…" /><button class="secondary ideaAddBtn">Add</button>`;
+    wrap.appendChild(addRow);
+    const input = addRow.querySelector('.ideaAddInput');
+    function addIdea(){
+      const text = input.value.trim();
+      if (!text) return;
+      const idea = { id: uid(), text };
+      ideasByCal[calKey] = ideasByCal[calKey].concat([idea]);
+      renderActivePanel();
+      saveIdea(calKey, idea);
+    }
+    addRow.querySelector('.ideaAddBtn').addEventListener('click', addIdea);
+    input.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') addIdea(); });
+
+    return wrap;
+  }
+
   const overlay = document.getElementById('overlay');
   const modalBody = document.getElementById('modalBody');
   function closeModal(){ overlay.classList.remove('open'); }
   overlay.addEventListener('click', (e)=>{ if (e.target === overlay) closeModal(); });
 
-  function openDayModal(dateKey){
+  function openDayModal(calKey, dateKey){
     const d = new Date(dateKey + 'T00:00:00');
     const label = d.toLocaleDateString('en-GB', { day:'2-digit', month:'long', year:'numeric' });
 
@@ -779,7 +883,7 @@
     `;
 
     // Local copy so the modal updates instantly, without waiting on the Firebase round-trip
-    let localEntries = Object.assign({}, calendarEntries[dateKey] || {});
+    let localEntries = Object.assign({}, calendarEntries[calKey][dateKey] || {});
 
     const listEl = modalBody.querySelector('#dayEntryList');
     function renderEntries(){
@@ -800,20 +904,20 @@
           const newVal = { text: entryText(val), ready: !ready };
           localEntries[id] = newVal;
           renderEntries();
-          toggleCalEntryReady(dateKey, id, val);
+          toggleCalEntryReady(calKey, dateKey, id, val);
         });
         row.querySelector('.entry-del-btn').addEventListener('click', ()=>{
           delete localEntries[id];
-          if (calendarEntries[dateKey]) delete calendarEntries[dateKey][id];
+          if (calendarEntries[calKey][dateKey]) delete calendarEntries[calKey][dateKey][id];
           renderEntries();
-          deleteCalEntry(dateKey, id);
+          deleteCalEntry(calKey, dateKey, id);
         });
         row.querySelector('.entry-move-btn').addEventListener('click', ()=>{
           const newDate = row.querySelector('.entry-move-date').value;
           if (!newDate || newDate === dateKey) return;
           delete localEntries[id];
           renderEntries();
-          moveCalEntry(dateKey, newDate, id, val);
+          moveCalEntry(calKey, dateKey, newDate, id, val);
         });
         listEl.appendChild(row);
       });
@@ -831,10 +935,10 @@
       const entryId = uid();
       const newVal = { text, ready: false };
       localEntries[entryId] = newVal;
-      if (!calendarEntries[dateKey]) calendarEntries[dateKey] = {};
-      calendarEntries[dateKey][entryId] = newVal;
+      if (!calendarEntries[calKey][dateKey]) calendarEntries[calKey][dateKey] = {};
+      calendarEntries[calKey][dateKey][entryId] = newVal;
       renderEntries();
-      saveCalEntry(dateKey, entryId, newVal);
+      saveCalEntry(calKey, dateKey, entryId, newVal);
     }
     modalBody.querySelector('#dayEntryAddBtn').addEventListener('click', addEntry);
     input.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') addEntry(); });
