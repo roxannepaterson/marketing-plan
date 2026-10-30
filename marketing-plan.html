@@ -132,6 +132,42 @@
   .page-header{ display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap; }
   .brand-logo{ height:36px; width:auto; flex-shrink:0; }
   @media (max-width:640px){ .page-header{ flex-direction:column-reverse; } .brand-logo{ height:28px; } }
+
+  /* ---------- Enquiries ---------- */
+  .enq-form{ display:grid; grid-template-columns:150px minmax(190px,auto) 1fr 1fr; gap:12px 14px; align-items:end; }
+  .enq-f label{ display:block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); margin-bottom:4px; }
+  .enq-f input[type=text], .enq-f input[type=date], .enq-f textarea{ width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:13.5px; background:#fff; color:var(--ink); }
+  .enq-f textarea{ resize:vertical; min-height:60px; }
+  .enq-wide{ grid-column:1 / -1; }
+  .enq-pills{ display:flex; gap:6px; }
+  .enq-pill{ padding:8px 14px; border:1px solid var(--line); border-radius:18px; background:#fff; color:var(--ink-soft); font-size:13px; font-weight:600; cursor:pointer; }
+  .enq-pill.on{ background:var(--ink); border-color:var(--ink); color:#fff; }
+  .enq-actions{ display:flex; align-items:center; gap:12px; margin-top:14px; }
+  .enq-actions button{ padding:9px 16px; font-size:13px; }
+  .enq-msg{ font-size:12.5px; font-weight:600; color:var(--detractor); }
+  .enq-msg.ok{ color:var(--promoter); }
+  .enq-summary{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 12px; font-size:12.5px; color:var(--ink-soft); }
+  .enq-chip{ padding:3px 10px; border-radius:12px; background:var(--neutral-soft); font-weight:600; color:var(--ink-soft); }
+  .enq-filters{ display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px; }
+  .enq-filter{ padding:5px 12px; border:1px solid var(--line); border-radius:16px; background:#fff; color:var(--ink-soft); font-size:12.5px; font-weight:600; cursor:pointer; }
+  .enq-filter.on{ background:var(--gold-soft); border-color:var(--gold); color:var(--gold); }
+  .enq-head, .enq-row{ display:grid; grid-template-columns:140px 190px 140px 1fr 26px; gap:12px; align-items:start; }
+  .enq-head{ padding:0 4px 6px; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); border-bottom:2px solid var(--line); }
+  .enq-row{ padding:9px 4px; border-bottom:1px solid var(--line); }
+  .enq-row:last-child{ border-bottom:none; }
+  .enq-row input, .enq-row select, .enq-row textarea{ width:100%; padding:6px 8px; border:1px solid transparent; border-radius:6px; background:transparent; font-size:13.5px; color:var(--ink); }
+  .enq-row input:hover, .enq-row select:hover, .enq-row textarea:hover, .enq-row input:focus, .enq-row select:focus, .enq-row textarea:focus{ border-color:var(--line); background:#fff; outline:none; }
+  .enq-row textarea{ resize:none; overflow:hidden; line-height:1.4; min-height:32px; }
+  .enq-src{ display:flex; flex-direction:column; gap:4px; }
+  .enq-src .enq-other-in{ font-size:12.5px; color:var(--ink-soft); }
+  .enq-src .enq-other-in.needs{ border-color:var(--detractor); background:var(--detractor-soft); }
+  .enq-del{ background:none; border:none; color:var(--detractor); cursor:pointer; font-size:16px; padding:2px 4px; line-height:1; }
+  @media (max-width:820px){
+    .enq-form{ grid-template-columns:1fr 1fr; }
+    .enq-head{ display:none; }
+    .enq-row{ grid-template-columns:1fr 1fr; gap:8px; }
+    .enq-row .enq-descwrap{ grid-column:1 / -1; }
+  }
 </style>
 </head>
 <body>
@@ -223,6 +259,12 @@
   let ideasByCal = { calendar:[], instagramCalendar:[] };
   let actionsByTab = { calendar:[], instagramCalendar:[], website:[], caseStudies:[], marketingCollateral:[] };
   let meetings = [];
+  let enquiries = [];
+  const ENQ_SOURCES = ['Web','Phone','Other'];
+  let enqFilter = 'all';
+  let enqPendingRender = false;
+  let enqNotice = '';
+  let enqDraft = { date:'', source:'', other:'', owner:'', desc:'' };
   let expandedMeetingIds = new Set();
   let calMonth = new Date().getMonth();
   let calYear = new Date().getFullYear();
@@ -249,6 +291,9 @@
   });
   meetingsRef.on('value', (s)=>{ meetings = objToArray(s.val()); if (activeTab==='meetingNotes') renderActivePanel(); },
     (e)=> showError('Could not load meeting notes: ' + e.code + ' — ' + e.message));
+  const enquiriesRef = db.ref('marketingPlanEnquiries');
+  enquiriesRef.on('value', (s)=>{ enquiries = objToArray(s.val()); if (activeTab==='enquiries') requestEnquiriesRender(); },
+    (e)=> showError('Could not load enquiries: ' + e.code + ' — ' + e.message));
 
   CONTENT_TABS.forEach(t=>{
     db.ref('marketingPlanActions/' + t.key).on('value', (s)=>{
@@ -332,7 +377,7 @@
 
   function renderTabNav(){
     tabNav.innerHTML = '';
-    const allTabs = [['dashboard','Dashboard'], ['actionsOverview','Actions']].concat(CONTENT_TABS.map(t=>[t.key, t.label])).concat([['meetingNotes','Marketing Meeting Notes']]);
+    const allTabs = [['dashboard','Dashboard'], ['enquiries','Enquiries'], ['actionsOverview','Actions']].concat(CONTENT_TABS.map(t=>[t.key, t.label])).concat([['meetingNotes','Marketing Meeting Notes']]);
     allTabs.forEach(([key,label])=>{
       const btn = document.createElement('button');
       btn.className = 'tab-btn' + (activeTab === key ? ' active' : '');
@@ -345,11 +390,147 @@
   function renderActivePanel(){
     panelsEl.innerHTML = '';
     if (activeTab === 'dashboard'){ panelsEl.appendChild(buildDashboardPanel()); return; }
+    if (activeTab === 'enquiries'){ panelsEl.appendChild(buildEnquiriesPanel()); return; }
     if (activeTab === 'actionsOverview'){ panelsEl.appendChild(buildActionsOverviewPanel()); return; }
     if (CALENDAR_TABS[activeTab]){ panelsEl.appendChild(buildCalendarPanel(activeTab)); return; }
     if (activeTab === 'meetingNotes'){ panelsEl.appendChild(buildMeetingNotesPanel()); return; }
     const tab = CONTENT_TABS.find(t=>t.key===activeTab);
     panelsEl.appendChild(buildGenericTabPanel(tab));
+  }
+
+  // ---------- Enquiries ----------
+  // Don't redraw under someone's cursor while they're typing; catch up when they click away.
+  function requestEnquiriesRender(){
+    const a = document.activeElement;
+    if (a && panelsEl.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.type !== 'checkbox'){ enqPendingRender = true; return; }
+    renderActivePanel();
+  }
+  document.addEventListener('focusout', ()=>{ setTimeout(()=>{ if (enqPendingRender && activeTab === 'enquiries'){ enqPendingRender = false; requestEnquiriesRender(); } }, 0); });
+
+  function todayIsoLocal(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+  function ownerSuggestions(){
+    const set = new Set();
+    enquiries.forEach(e=>{ if (e.owner) set.add(e.owner); });
+    Object.values(actionsByTab).forEach(list=> (list || []).forEach(a=>{ if (a.owner) set.add(a.owner); }));
+    return [...set].sort((a,b)=> a.localeCompare(b));
+  }
+  function autoGrow(ta){ ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+  const updateEnquiry = async (id, fields)=>{ try{ await enquiriesRef.child(id).update(fields); }catch(e){ showError('Save failed: ' + e.code + ' — ' + e.message); } };
+
+  function buildEnquiriesPanel(){
+    const panel = document.createElement('div');
+    panel.className = 'panel active';
+    if (!enqDraft.date) enqDraft.date = todayIsoLocal();
+
+    // ----- log an enquiry -----
+    const add = document.createElement('div');
+    add.className = 'card';
+    add.style.marginBottom = '18px';
+    add.innerHTML = `
+      <h2>Log an enquiry</h2>
+      <p class="card-sub">Any enquiry that comes in: from the website, over the phone, or somewhere else.</p>
+      <div class="enq-form">
+        <div class="enq-f"><label for="enqDate">Date</label><input type="date" id="enqDate"></div>
+        <div class="enq-f"><label>Source</label><div class="enq-pills" role="group" aria-label="Source">${ENQ_SOURCES.map(s=> `<button type="button" class="enq-pill ${enqDraft.source === s ? 'on' : ''}" data-src="${s}">${s}</button>`).join('')}</div></div>
+        <div class="enq-f" id="enqOtherWrap" style="${enqDraft.source === 'Other' ? '' : 'display:none'}"><label for="enqOther">What source?</label><input type="text" id="enqOther" placeholder="e.g. referral, event, LinkedIn message"></div>
+        <div class="enq-f"><label for="enqOwner">Owner</label><input type="text" id="enqOwner" list="enqOwners" placeholder="Who is following it up?" autocomplete="off"></div>
+        <div class="enq-f enq-wide"><label for="enqDesc">Description</label><textarea id="enqDesc" rows="2" placeholder="What did they enquire about?"></textarea></div>
+      </div>
+      <datalist id="enqOwners">${ownerSuggestions().map(o=> `<option value="${escapeHtml(o)}">`).join('')}</datalist>
+      <div class="enq-actions"><button id="enqAddBtn" type="button">Add enquiry</button><span class="enq-msg" id="enqMsg"></span></div>`;
+    panel.appendChild(add);
+
+    const $q = (sel)=> add.querySelector(sel);
+    if (enqNotice){ const m = $q('#enqMsg'); m.className = 'enq-msg ok'; m.textContent = enqNotice; }
+    $q('#enqDate').value = enqDraft.date;
+    $q('#enqOther').value = enqDraft.other;
+    $q('#enqOwner').value = enqDraft.owner;
+    $q('#enqDesc').value = enqDraft.desc;
+    const clearNotice = ()=>{ if (enqNotice){ enqNotice = ''; const m = document.getElementById('enqMsg'); if (m){ m.textContent = ''; m.className = 'enq-msg'; } } };
+    $q('#enqDate').addEventListener('input', e=>{ enqDraft.date = e.target.value; clearNotice(); });
+    $q('#enqOther').addEventListener('input', e=>{ enqDraft.other = e.target.value; clearNotice(); });
+    $q('#enqOwner').addEventListener('input', e=>{ enqDraft.owner = e.target.value; clearNotice(); });
+    $q('#enqDesc').addEventListener('input', e=>{ enqDraft.desc = e.target.value; clearNotice(); });
+    add.querySelectorAll('.enq-pill').forEach(b=> b.addEventListener('click', ()=>{
+      enqDraft.source = b.dataset.src;
+      add.querySelectorAll('.enq-pill').forEach(x=> x.classList.toggle('on', x.dataset.src === enqDraft.source));
+      $q('#enqOtherWrap').style.display = enqDraft.source === 'Other' ? '' : 'none';
+      if (enqDraft.source === 'Other') $q('#enqOther').focus();
+    }));
+    $q('#enqAddBtn').addEventListener('click', async ()=>{
+      const msg = $q('#enqMsg'); msg.className = 'enq-msg'; msg.textContent = '';
+      const d = enqDraft;
+      if (!d.source){ msg.textContent = 'Pick a source: Web, Phone or Other.'; return; }
+      if (d.source === 'Other' && !d.other.trim()){ msg.textContent = 'Type what the other source was.'; $q('#enqOther').focus(); return; }
+      if (!d.desc.trim()){ msg.textContent = 'Add a short description.'; $q('#enqDesc').focus(); return; }
+      const e = { id: uid(), date: d.date || todayIsoLocal(), source: d.source, sourceOther: d.source === 'Other' ? d.other.trim() : '', owner: d.owner.trim(), description: d.desc.trim(), created: Date.now() };
+      enqDraft = { date:'', source:'', other:'', owner:'', desc:'' };
+      enquiries = enquiries.concat([e]);
+      enqNotice = 'Added.';
+      renderActivePanel();
+      setTimeout(()=>{ if (enqNotice === 'Added.'){ clearNotice(); } }, 4000);
+      try{ await enquiriesRef.child(e.id).set(e); }catch(err){ showError('Save failed: ' + err.code + ' — ' + err.message); }
+    });
+
+    // ----- the log -----
+    const log = document.createElement('div');
+    log.className = 'card';
+    const monthKey = todayIsoLocal().slice(0,7);
+    const thisMonth = enquiries.filter(e=> (e.date || '').slice(0,7) === monthKey);
+    const by = (list, s)=> list.filter(e=> e.source === s).length;
+    const shown = enquiries.filter(e=> enqFilter === 'all' || e.source === enqFilter)
+      .sort((a,b)=> (b.date || '').localeCompare(a.date || '') || (b.created || 0) - (a.created || 0));
+    log.innerHTML = `
+      <h2>Enquiries <span style="font-weight:400; font-size:14px; color:var(--ink-soft);">${enquiries.length}</span></h2>
+      <p class="card-sub">Newest first. Click any field to change it.</p>
+      <div class="enq-summary"><b style="color:var(--ink)">This month:</b> <span class="enq-chip">${thisMonth.length} enquir${thisMonth.length === 1 ? 'y' : 'ies'}</span>
+        ${ENQ_SOURCES.map(s=> `<span class="enq-chip">${s} ${by(thisMonth, s)}</span>`).join('')}</div>
+      <div class="enq-filters">${['all'].concat(ENQ_SOURCES).map(f=> `<button type="button" class="enq-filter ${enqFilter === f ? 'on' : ''}" data-f="${f}">${f === 'all' ? 'All' : f} (${f === 'all' ? enquiries.length : by(enquiries, f)})</button>`).join('')}</div>`;
+    log.querySelectorAll('.enq-filter').forEach(b=> b.addEventListener('click', ()=>{ enqFilter = b.dataset.f; renderActivePanel(); }));
+
+    if (!shown.length){
+      const empty = document.createElement('p');
+      empty.style.cssText = 'font-size:13px; color:var(--ink-soft); margin:6px 0 0;';
+      empty.textContent = enquiries.length ? 'No ' + enqFilter + ' enquiries logged.' : 'No enquiries logged yet. Add the first one above.';
+      log.appendChild(empty);
+    } else {
+      const head = document.createElement('div');
+      head.className = 'enq-head';
+      head.innerHTML = '<span>Date</span><span>Source</span><span>Owner</span><span>Description</span><span></span>';
+      log.appendChild(head);
+      shown.forEach(e=>{
+        const row = document.createElement('div');
+        row.className = 'enq-row';
+        row.innerHTML = `
+          <input type="date" class="enq-date" value="${escapeHtml(e.date || '')}" aria-label="Date">
+          <div class="enq-src">
+            <select class="enq-source" aria-label="Source">${ENQ_SOURCES.map(s=> `<option ${e.source === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+            ${e.source === 'Other' ? `<input type="text" class="enq-other-in ${(e.sourceOther || '').trim() ? '' : 'needs'}" value="${escapeHtml(e.sourceOther || '')}" placeholder="Which source?" aria-label="Other source">` : ''}
+          </div>
+          <input type="text" class="enq-owner" list="enqOwners" value="${escapeHtml(e.owner || '')}" placeholder="Owner…" aria-label="Owner" autocomplete="off">
+          <div class="enq-descwrap"><textarea class="enq-desc" rows="1" aria-label="Description">${escapeHtml(e.description || '')}</textarea></div>
+          <button class="enq-del" type="button" aria-label="Delete enquiry" title="Delete">×</button>`;
+        row.querySelector('.enq-date').addEventListener('change', ev=> updateEnquiry(e.id, { date: ev.target.value }));
+        row.querySelector('.enq-source').addEventListener('change', ev=>{
+          const v = ev.target.value;
+          updateEnquiry(e.id, { source: v, sourceOther: v === 'Other' ? (e.sourceOther || '') : '' });
+        });
+        const oth = row.querySelector('.enq-other-in');
+        if (oth) oth.addEventListener('change', ev=> updateEnquiry(e.id, { sourceOther: ev.target.value.trim() }));
+        row.querySelector('.enq-owner').addEventListener('change', ev=> updateEnquiry(e.id, { owner: ev.target.value.trim() }));
+        const ta = row.querySelector('.enq-desc');
+        ta.addEventListener('input', ()=> autoGrow(ta));
+        ta.addEventListener('change', ()=>{ const v = ta.value.trim(); if (v) updateEnquiry(e.id, { description: v }); else { ta.value = e.description || ''; autoGrow(ta); } });
+        row.querySelector('.enq-del').addEventListener('click', async ()=>{
+          if (!confirm('Delete this enquiry?')) return;
+          try{ await enquiriesRef.child(e.id).remove(); }catch(err){ showError('Delete failed: ' + err.code + ' — ' + err.message); }
+        });
+        log.appendChild(row);
+        requestAnimationFrame(()=> autoGrow(ta));
+      });
+    }
+    panel.appendChild(log);
+    return panel;
   }
 
   // ---------- Dashboard ----------
